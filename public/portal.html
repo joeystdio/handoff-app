@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client Portal — Handoff</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        .stage-backlog { background: #f3f4f6; color: #374151; }
+        .stage-in_progress { background: #dbeafe; color: #1d4ed8; }
+        .stage-review { background: #fef3c7; color: #b45309; }
+        .stage-done { background: #d1fae5; color: #047857; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="loading" class="min-h-screen flex items-center justify-center">
+        <div class="animate-spin w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div>
+    </div>
+    
+    <div id="error" class="hidden min-h-screen flex items-center justify-center">
+        <div class="text-center">
+            <div class="text-5xl mb-4">😕</div>
+            <h2 class="text-2xl font-bold mb-2">Access Denied</h2>
+            <p class="text-gray-600">This link is invalid or has expired.</p>
+        </div>
+    </div>
+    
+    <div id="portal" class="hidden">
+        <!-- Header (dynamic based on portal branding) -->
+        <header id="portal-header" class="bg-white border-b sticky top-0 z-50">
+            <div class="max-w-4xl mx-auto px-6 py-4">
+                <h1 id="portal-name" class="text-xl font-bold"></h1>
+            </div>
+        </header>
+        
+        <!-- Projects List -->
+        <div id="projects-view" class="max-w-4xl mx-auto px-6 py-8">
+            <h2 class="text-2xl font-bold mb-6">Your Projects</h2>
+            <div id="projects-list" class="space-y-4"></div>
+        </div>
+        
+        <!-- Project Detail -->
+        <div id="project-view" class="hidden max-w-4xl mx-auto px-6 py-8">
+            <button onclick="showProjects()" class="text-indigo-600 text-sm mb-4">← Back to Projects</button>
+            <h2 id="project-name" class="text-2xl font-bold mb-2"></h2>
+            <p id="project-description" class="text-gray-600 mb-8"></p>
+            
+            <!-- Progress Board -->
+            <div class="mb-8">
+                <h3 class="font-semibold mb-4">Progress</h3>
+                <div id="tasks-board" class="grid grid-cols-4 gap-3"></div>
+            </div>
+            
+            <!-- Updates -->
+            <div class="mb-8">
+                <h3 class="font-semibold mb-4">Updates</h3>
+                <div id="updates-list" class="space-y-4 mb-4"></div>
+                
+                <form id="reply-form" class="bg-white p-4 rounded-xl border">
+                    <textarea id="reply-content" rows="2" placeholder="Write a reply..." class="w-full px-3 py-2 border rounded-lg mb-2"></textarea>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg">Send Reply</button>
+                </form>
+            </div>
+            
+            <!-- Files -->
+            <div>
+                <h3 class="font-semibold mb-4">Files</h3>
+                <div id="files-list" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const token = new URLSearchParams(window.location.search).get('token');
+        let projects = [];
+        let currentProject = null;
+        
+        const api = {
+            async get(path) {
+                const res = await fetch(`/api/portal${path}`, {
+                    headers: { 'X-Client-Token': token }
+                });
+                if (!res.ok) throw new Error('Failed');
+                return res.json();
+            },
+            async post(path, body) {
+                const res = await fetch(`/api/portal${path}`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Client-Token': token 
+                    },
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) throw new Error('Failed');
+                return res.json();
+            }
+        };
+        
+        async function init() {
+            if (!token) {
+                showError();
+                return;
+            }
+            
+            try {
+                projects = await api.get('/projects');
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('portal').classList.remove('hidden');
+                renderProjects();
+            } catch (e) {
+                showError();
+            }
+        }
+        
+        function showError() {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error').classList.remove('hidden');
+        }
+        
+        function renderProjects() {
+            document.getElementById('projects-view').classList.remove('hidden');
+            document.getElementById('project-view').classList.add('hidden');
+            
+            const list = document.getElementById('projects-list');
+            if (projects.length === 0) {
+                list.innerHTML = '<p class="text-gray-500">No projects yet.</p>';
+                return;
+            }
+            
+            list.innerHTML = projects.map(p => `
+                <div onclick="viewProject('${p.id}')" class="bg-white p-6 rounded-xl border hover:border-indigo-300 cursor-pointer transition">
+                    <h3 class="font-semibold text-lg mb-1">${p.name}</h3>
+                    <p class="text-gray-500">${p.description || 'No description'}</p>
+                </div>
+            `).join('');
+        }
+        
+        async function viewProject(id) {
+            try {
+                currentProject = await api.get(`/projects/${id}`);
+                renderProject();
+            } catch (e) {
+                alert('Failed to load project');
+            }
+        }
+        
+        function showProjects() {
+            renderProjects();
+        }
+        
+        function renderProject() {
+            document.getElementById('projects-view').classList.add('hidden');
+            document.getElementById('project-view').classList.remove('hidden');
+            
+            document.getElementById('project-name').textContent = currentProject.name;
+            document.getElementById('project-description').textContent = currentProject.description || '';
+            
+            // Tasks board
+            const stages = ['backlog', 'in_progress', 'review', 'done'];
+            const stageNames = { backlog: 'Backlog', in_progress: 'In Progress', review: 'Review', done: 'Done' };
+            
+            const board = document.getElementById('tasks-board');
+            board.innerHTML = stages.map(stage => {
+                const tasks = currentProject.tasks.filter(t => t.stage === stage);
+                return `
+                    <div class="bg-gray-100 rounded-xl p-3">
+                        <h4 class="font-medium text-sm mb-2 text-gray-700">${stageNames[stage]}</h4>
+                        <div class="space-y-2">
+                            ${tasks.map(t => `
+                                <div class="bg-white p-2 rounded-lg text-sm stage-${t.stage}">
+                                    ${t.title}
+                                </div>
+                            `).join('') || '<p class="text-gray-400 text-xs">No tasks</p>'}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Updates
+            const updates = document.getElementById('updates-list');
+            updates.innerHTML = currentProject.updates.map(u => `
+                <div class="bg-white p-4 rounded-xl border ${u.author_type === 'client' ? 'ml-8 bg-indigo-50' : ''}">
+                    <div class="flex justify-between items-start mb-2">
+                        <span class="font-medium text-sm">${u.author_name || 'Unknown'}</span>
+                        <span class="text-xs text-gray-500">${timeAgo(u.created_at)}</span>
+                    </div>
+                    <p class="text-sm">${u.content}</p>
+                </div>
+            `).join('') || '<p class="text-gray-500">No updates yet.</p>';
+            
+            // Files
+            const files = document.getElementById('files-list');
+            files.innerHTML = currentProject.files.map(f => `
+                <a href="/api/files/${f.id}/download?token=${token}" 
+                   class="block bg-white p-4 rounded-xl border hover:border-indigo-300 transition">
+                    <div class="flex items-center gap-3">
+                        <div class="text-2xl">📄</div>
+                        <div>
+                            <p class="font-medium">${f.name}</p>
+                            <p class="text-sm text-gray-500">${formatBytes(f.file_size)}</p>
+                        </div>
+                        <div class="ml-auto text-indigo-600">Download →</div>
+                    </div>
+                </a>
+            `).join('') || '<p class="text-gray-500">No files yet.</p>';
+        }
+        
+        // Reply form
+        document.getElementById('reply-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const content = document.getElementById('reply-content').value;
+            if (!content.trim()) return;
+            
+            try {
+                await api.post(`/projects/${currentProject.id}/updates`, { content });
+                currentProject = await api.get(`/projects/${currentProject.id}`);
+                renderProject();
+                document.getElementById('reply-content').value = '';
+            } catch (e) {
+                alert('Failed to send reply');
+            }
+        });
+        
+        function timeAgo(date) {
+            const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+            if (seconds < 60) return 'just now';
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ago`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours}h ago`;
+            const days = Math.floor(hours / 24);
+            return `${days}d ago`;
+        }
+        
+        function formatBytes(bytes) {
+            if (!bytes) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+        
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Handoff — Client Portal for Freelancers</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        .stage-backlog { background: #f3f4f6; }
+        .stage-in_progress { background: #dbeafe; }
+        .stage-review { background: #fef3c7; }
+        .stage-done { background: #d1fae5; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="app"></div>
+
+    <script>
+    // ==================== STATE ====================
+    let state = {
+        user: null,
+        token: localStorage.getItem('token'),
+        currentView: 'loading',
+        portals: [],
+        currentPortal: null,
+        clients: [],
+        currentClient: null,
+        projects: [],
+        currentProject: null,
+        tasks: [],
+        updates: [],
+        files: [],
+        clientActivity: null
+    };
+
+    // ==================== API ====================
+    const api = {
+        async request(method, path, body) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+            
+            const res = await fetch(`/api${path}`, {
+                method,
+                headers,
+                body: body ? JSON.stringify(body) : undefined
+            });
+            
+            if (!res.ok) {
+                const error = await res.json().catch(() => ({ error: 'Request failed' }));
+                throw new Error(error.error);
+            }
+            return res.json();
+        },
+        get: (path) => api.request('GET', path),
+        post: (path, body) => api.request('POST', path, body),
+        patch: (path, body) => api.request('PATCH', path, body),
+        delete: (path) => api.request('DELETE', path)
+    };
+
+    // ==================== AUTH ====================
+    async function checkAuth() {
+        if (!state.token) {
+            state.currentView = 'auth';
+            render();
+            return;
+        }
+        try {
+            state.user = await api.get('/auth/me');
+            state.currentView = 'dashboard';
+            await loadPortals();
+        } catch (e) {
+            localStorage.removeItem('token');
+            state.token = null;
+            state.currentView = 'auth';
+        }
+        render();
+    }
+
+    async function login(email, password) {
+        const { token, user } = await api.post('/auth/login', { email, password });
+        localStorage.setItem('token', token);
+        state.token = token;
+        state.user = user;
+        state.currentView = 'dashboard';
+        await loadPortals();
+        render();
+    }
+
+    async function register(email, password, name) {
+        const { token, user } = await api.post('/auth/register', { email, password, name });
+        localStorage.setItem('token', token);
+        state.token = token;
+        state.user = user;
+        state.currentView = 'dashboard';
+        render();
+    }
+
+    function logout() {
+        localStorage.removeItem('token');
+        state.token = null;
+        state.user = null;
+        state.currentView = 'auth';
+        render();
+    }
+
+    // ==================== DATA LOADING ====================
+    async function loadPortals() {
+        state.portals = await api.get('/portals');
+    }
+
+    async function loadClients(portalId) {
+        state.clients = await api.get(`/portals/${portalId}/clients`);
+    }
+
+    async function loadProjects(clientId) {
+        state.projects = await api.get(`/clients/${clientId}/projects`);
+    }
+
+    async function loadProject(projectId) {
+        const data = await api.get(`/projects/${projectId}`);
+        state.currentProject = data;
+        state.tasks = data.tasks || [];
+        state.updates = await api.get(`/projects/${projectId}/updates`);
+        state.files = await api.get(`/projects/${projectId}/files`);
+    }
+
+    async function loadClientActivity(clientId) {
+        state.clientActivity = await api.get(`/clients/${clientId}/activity`);
+    }
+
+    // ==================== ACTIONS ====================
+    async function createPortal(subdomain, name) {
+        await api.post('/portals', { subdomain, name });
+        await loadPortals();
+        render();
+    }
+
+    async function createClient(portalId, name, email) {
+        const result = await api.post(`/portals/${portalId}/clients`, { name, email });
+        await loadClients(portalId);
+        render();
+        return result;
+    }
+
+    async function createProject(clientId, name, description) {
+        await api.post(`/clients/${clientId}/projects`, { name, description });
+        await loadProjects(clientId);
+        render();
+    }
+
+    async function createTask(projectId, title, stage = 'backlog') {
+        await api.post(`/projects/${projectId}/tasks`, { title, stage });
+        await loadProject(projectId);
+        render();
+    }
+
+    async function updateTask(taskId, updates) {
+        await api.patch(`/tasks/${taskId}`, updates);
+        if (state.currentProject) {
+            await loadProject(state.currentProject.id);
+            render();
+        }
+    }
+
+    async function deleteTask(taskId) {
+        await api.delete(`/tasks/${taskId}`);
+        if (state.currentProject) {
+            await loadProject(state.currentProject.id);
+            render();
+        }
+    }
+
+    async function postUpdate(projectId, content) {
+        await api.post(`/projects/${projectId}/updates`, { content });
+        state.updates = await api.get(`/projects/${projectId}/updates`);
+        render();
+    }
+
+    // ==================== NAVIGATION ====================
+    function navigate(view, data = {}) {
+        state.currentView = view;
+        Object.assign(state, data);
+        render();
+    }
+
+    async function selectPortal(portal) {
+        state.currentPortal = portal;
+        await loadClients(portal.id);
+        navigate('portal');
+    }
+
+    async function selectClient(client) {
+        state.currentClient = client;
+        await loadProjects(client.id);
+        await loadClientActivity(client.id);
+        navigate('client');
+    }
+
+    async function selectProject(project) {
+        await loadProject(project.id);
+        navigate('project');
+    }
+
+    // ==================== RENDER ====================
+    function render() {
+        const app = document.getElementById('app');
+        
+        switch (state.currentView) {
+            case 'loading':
+                app.innerHTML = renderLoading();
+                break;
+            case 'auth':
+                app.innerHTML = renderAuth();
+                break;
+            case 'dashboard':
+                app.innerHTML = renderDashboard();
+                break;
+            case 'portal':
+                app.innerHTML = renderPortal();
+                break;
+            case 'client':
+                app.innerHTML = renderClient();
+                break;
+            case 'project':
+                app.innerHTML = renderProject();
+                break;
+        }
+    }
+
+    function renderLoading() {
+        return `
+            <div class="min-h-screen flex items-center justify-center">
+                <div class="animate-spin w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div>
+            </div>
+        `;
+    }
+
+    function renderAuth() {
+        return `
+            <div class="min-h-screen flex items-center justify-center p-6">
+                <div class="w-full max-w-md">
+                    <h1 class="text-3xl font-bold text-center mb-8">📦 Handoff</h1>
+                    
+                    <div class="bg-white rounded-2xl shadow-sm p-8">
+                        <div class="flex gap-4 mb-6">
+                            <button onclick="showLogin()" id="login-tab" class="flex-1 py-2 font-medium text-indigo-600 border-b-2 border-indigo-600">Login</button>
+                            <button onclick="showRegister()" id="register-tab" class="flex-1 py-2 font-medium text-gray-400 border-b-2 border-transparent">Register</button>
+                        </div>
+                        
+                        <form id="auth-form" onsubmit="handleAuth(event)">
+                            <div id="name-field" class="hidden mb-4">
+                                <label class="block text-sm font-medium mb-1">Name</label>
+                                <input type="text" name="name" class="w-full px-4 py-2 border rounded-lg">
+                            </div>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium mb-1">Email</label>
+                                <input type="email" name="email" required class="w-full px-4 py-2 border rounded-lg">
+                            </div>
+                            <div class="mb-6">
+                                <label class="block text-sm font-medium mb-1">Password</label>
+                                <input type="password" name="password" required class="w-full px-4 py-2 border rounded-lg">
+                            </div>
+                            <button type="submit" class="w-full py-3 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700">
+                                Continue
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    let authMode = 'login';
+    function showLogin() {
+        authMode = 'login';
+        document.getElementById('login-tab').classList.add('text-indigo-600', 'border-indigo-600');
+        document.getElementById('login-tab').classList.remove('text-gray-400', 'border-transparent');
+        document.getElementById('register-tab').classList.remove('text-indigo-600', 'border-indigo-600');
+        document.getElementById('register-tab').classList.add('text-gray-400', 'border-transparent');
+        document.getElementById('name-field').classList.add('hidden');
+    }
+    function showRegister() {
+        authMode = 'register';
+        document.getElementById('register-tab').classList.add('text-indigo-600', 'border-indigo-600');
+        document.getElementById('register-tab').classList.remove('text-gray-400', 'border-transparent');
+        document.getElementById('login-tab').classList.remove('text-indigo-600', 'border-indigo-600');
+        document.getElementById('login-tab').classList.add('text-gray-400', 'border-transparent');
+        document.getElementById('name-field').classList.remove('hidden');
+    }
+    async function handleAuth(e) {
+        e.preventDefault();
+        const form = e.target;
+        const email = form.email.value;
+        const password = form.password.value;
+        try {
+            if (authMode === 'login') {
+                await login(email, password);
+            } else {
+                const name = form.name.value;
+                await register(email, password, name);
+            }
+        } catch (err) {
+            alert(err.message);
+        }
+    }
+
+    function renderNav() {
+        return `
+            <nav class="bg-white border-b sticky top-0 z-50">
+                <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+                    <div class="flex items-center gap-4">
+                        <a href="#" onclick="navigate('dashboard'); loadPortals();" class="text-xl font-bold">📦 Handoff</a>
+                        ${state.currentPortal ? `<span class="text-gray-400">/</span><span class="text-gray-600">${state.currentPortal.name}</span>` : ''}
+                        ${state.currentClient ? `<span class="text-gray-400">/</span><span class="text-gray-600">${state.currentClient.name}</span>` : ''}
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="text-sm text-gray-600">${state.user?.name || state.user?.email}</span>
+                        <button onclick="logout()" class="text-sm text-gray-500 hover:text-gray-700">Logout</button>
+                    </div>
+                </div>
+            </nav>
+        `;
+    }
+
+    function renderDashboard() {
+        return `
+            ${renderNav()}
+            <div class="max-w-6xl mx-auto px-6 py-8">
+                <div class="flex items-center justify-between mb-6">
+                    <h1 class="text-2xl font-bold">Your Portals</h1>
+                    <button onclick="showCreatePortal()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                        + New Portal
+                    </button>
+                </div>
+                
+                <div id="create-portal-form" class="hidden mb-6 bg-white p-6 rounded-xl border">
+                    <h3 class="font-semibold mb-4">Create New Portal</h3>
+                    <form onsubmit="handleCreatePortal(event)">
+                        <div class="grid md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-1">Portal Name</label>
+                                <input type="text" name="name" required placeholder="Acme Studio" class="w-full px-4 py-2 border rounded-lg">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-1">Subdomain</label>
+                                <div class="flex">
+                                    <input type="text" name="subdomain" required placeholder="acme" class="flex-1 px-4 py-2 border rounded-l-lg">
+                                    <span class="px-3 py-2 bg-gray-100 border border-l-0 rounded-r-lg text-gray-500">.handoff.jdms.nl</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Portal</button>
+                    </form>
+                </div>
+                
+                ${state.portals.length === 0 ? `
+                    <div class="bg-white rounded-xl p-12 text-center border">
+                        <div class="text-4xl mb-4">📦</div>
+                        <h3 class="text-xl font-semibold mb-2">No portals yet</h3>
+                        <p class="text-gray-600 mb-4">Create your first portal to start sharing project updates with clients.</p>
+                        <button onclick="showCreatePortal()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Portal</button>
+                    </div>
+                ` : `
+                    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        ${state.portals.map(p => `
+                            <div onclick="selectPortal(${JSON.stringify(p).replace(/"/g, '&quot;')})" 
+                                 class="bg-white p-6 rounded-xl border hover:border-indigo-300 cursor-pointer transition">
+                                <h3 class="font-semibold text-lg mb-1">${p.name}</h3>
+                                <p class="text-gray-500 text-sm mb-3">${p.subdomain}.handoff.jdms.nl</p>
+                                <p class="text-sm text-gray-600">${p.client_count || 0} clients</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                `}
+            </div>
+        `;
+    }
+
+    function showCreatePortal() {
+        document.getElementById('create-portal-form').classList.toggle('hidden');
+    }
+    async function handleCreatePortal(e) {
+        e.preventDefault();
+        const form = e.target;
+        await createPortal(form.subdomain.value, form.name.value);
+        form.reset();
+        document.getElementById('create-portal-form').classList.add('hidden');
+    }
+
+    function renderPortal() {
+        return `
+            ${renderNav()}
+            <div class="max-w-6xl mx-auto px-6 py-8">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <button onclick="navigate('dashboard'); loadPortals();" class="text-indigo-600 text-sm mb-2">← Back to Portals</button>
+                        <h1 class="text-2xl font-bold">${state.currentPortal.name}</h1>
+                    </div>
+                    <button onclick="showCreateClient()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                        + Add Client
+                    </button>
+                </div>
+                
+                <div id="create-client-form" class="hidden mb-6 bg-white p-6 rounded-xl border">
+                    <h3 class="font-semibold mb-4">Add Client</h3>
+                    <form onsubmit="handleCreateClient(event)">
+                        <div class="grid md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-1">Client Name</label>
+                                <input type="text" name="name" required placeholder="Acme Corp" class="w-full px-4 py-2 border rounded-lg">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-1">Contact Email</label>
+                                <input type="email" name="email" required placeholder="client@acme.com" class="w-full px-4 py-2 border rounded-lg">
+                            </div>
+                        </div>
+                        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Client</button>
+                    </form>
+                </div>
+                
+                ${state.clients.length === 0 ? `
+                    <div class="bg-white rounded-xl p-12 text-center border">
+                        <div class="text-4xl mb-4">👥</div>
+                        <h3 class="text-xl font-semibold mb-2">No clients yet</h3>
+                        <p class="text-gray-600 mb-4">Add your first client to create projects and share updates.</p>
+                        <button onclick="showCreateClient()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Client</button>
+                    </div>
+                ` : `
+                    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        ${state.clients.map(c => `
+                            <div onclick="selectClient(${JSON.stringify(c).replace(/"/g, '&quot;')})"
+                                 class="bg-white p-6 rounded-xl border hover:border-indigo-300 cursor-pointer transition">
+                                <h3 class="font-semibold text-lg mb-1">${c.name}</h3>
+                                <p class="text-gray-500 text-sm mb-3">${c.email}</p>
+                                <div class="flex justify-between text-sm">
+                                    <span class="text-gray-600">${c.project_count || 0} projects</span>
+                                    ${c.last_seen_at ? `<span class="text-green-600">Seen ${timeAgo(c.last_seen_at)}</span>` : '<span class="text-gray-400">Never visited</span>'}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `}
+            </div>
+        `;
+    }
+
+    function showCreateClient() {
+        document.getElementById('create-client-form').classList.toggle('hidden');
+    }
+    async function handleCreateClient(e) {
+        e.preventDefault();
+        const form = e.target;
+        const result = await createClient(state.currentPortal.id, form.name.value, form.email.value);
+        alert('Client added! Share this link:\\n' + window.location.origin + result.portalUrl);
+        form.reset();
+        document.getElementById('create-client-form').classList.add('hidden');
+    }
+
+    function renderClient() {
+        const activity = state.clientActivity;
+        return `
+            ${renderNav()}
+            <div class="max-w-6xl mx-auto px-6 py-8">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <button onclick="selectPortal(state.currentPortal)" class="text-indigo-600 text-sm mb-2">← Back to ${state.currentPortal.name}</button>
+                        <h1 class="text-2xl font-bold">${state.currentClient.name}</h1>
+                        <p class="text-gray-500">${state.currentClient.email}</p>
+                    </div>
+                    <button onclick="showCreateProject()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                        + New Project
+                    </button>
+                </div>
+                
+                <!-- Client Activity -->
+                <div class="bg-white rounded-xl p-6 border mb-6">
+                    <h3 class="font-semibold mb-4">📊 Client Activity</h3>
+                    <div class="grid md:grid-cols-3 gap-4 text-center">
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <div class="text-2xl font-bold text-indigo-600">${activity?.views?.length || 0}</div>
+                            <div class="text-sm text-gray-600">Page Views</div>
+                        </div>
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <div class="text-2xl font-bold text-green-600">${activity?.downloads?.length || 0}</div>
+                            <div class="text-sm text-gray-600">File Downloads</div>
+                        </div>
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <div class="text-sm font-medium text-gray-900">${state.currentClient.last_seen_at ? timeAgo(state.currentClient.last_seen_at) : 'Never'}</div>
+                            <div class="text-sm text-gray-600">Last Seen</div>
+                        </div>
+                    </div>
+                    ${activity?.downloads?.length > 0 ? `
+                        <div class="mt-4 pt-4 border-t">
+                            <p class="text-sm font-medium mb-2">Recent Downloads:</p>
+                            ${activity.downloads.slice(0, 3).map(d => `
+                                <p class="text-sm text-gray-600">📥 ${d.file_name} — ${timeAgo(d.downloaded_at)}</p>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div id="create-project-form" class="hidden mb-6 bg-white p-6 rounded-xl border">
+                    <h3 class="font-semibold mb-4">Create Project</h3>
+                    <form onsubmit="handleCreateProject(event)">
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-1">Project Name</label>
+                            <input type="text" name="name" required placeholder="Website Redesign" class="w-full px-4 py-2 border rounded-lg">
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-1">Description</label>
+                            <textarea name="description" rows="2" placeholder="Brief description..." class="w-full px-4 py-2 border rounded-lg"></textarea>
+                        </div>
+                        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Project</button>
+                    </form>
+                </div>
+                
+                <!-- Portal Link -->
+                <div class="bg-indigo-50 rounded-xl p-4 mb-6 flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-indigo-900">Client Portal Link</p>
+                        <p class="text-sm text-indigo-700">${window.location.origin}/portal?token=${state.currentClient.access_token}</p>
+                    </div>
+                    <button onclick="navigator.clipboard.writeText('${window.location.origin}/portal?token=${state.currentClient.access_token}'); alert('Copied!');" 
+                            class="px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg">Copy</button>
+                </div>
+                
+                ${state.projects.length === 0 ? `
+                    <div class="bg-white rounded-xl p-12 text-center border">
+                        <div class="text-4xl mb-4">📁</div>
+                        <h3 class="text-xl font-semibold mb-2">No projects yet</h3>
+                        <p class="text-gray-600 mb-4">Create a project to start tracking tasks and sharing updates.</p>
+                        <button onclick="showCreateProject()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">New Project</button>
+                    </div>
+                ` : `
+                    <div class="space-y-4">
+                        ${state.projects.map(p => `
+                            <div onclick="selectProject(${JSON.stringify(p).replace(/"/g, '&quot;')})"
+                                 class="bg-white p-6 rounded-xl border hover:border-indigo-300 cursor-pointer transition">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <h3 class="font-semibold text-lg">${p.name}</h3>
+                                        <p class="text-gray-500 text-sm">${p.description || 'No description'}</p>
+                                    </div>
+                                    <span class="px-2 py-1 text-xs rounded-full ${p.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">${p.status}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `}
+            </div>
+        `;
+    }
+
+    function showCreateProject() {
+        document.getElementById('create-project-form').classList.toggle('hidden');
+    }
+    async function handleCreateProject(e) {
+        e.preventDefault();
+        const form = e.target;
+        await createProject(state.currentClient.id, form.name.value, form.description.value);
+        form.reset();
+        document.getElementById('create-project-form').classList.add('hidden');
+    }
+
+    function renderProject() {
+        const stages = ['backlog', 'in_progress', 'review', 'done'];
+        const stageNames = { backlog: 'Backlog', in_progress: 'In Progress', review: 'Review', done: 'Done' };
+        
+        return `
+            ${renderNav()}
+            <div class="max-w-6xl mx-auto px-6 py-8">
+                <div class="mb-6">
+                    <button onclick="selectClient(state.currentClient)" class="text-indigo-600 text-sm mb-2">← Back to ${state.currentClient.name}</button>
+                    <h1 class="text-2xl font-bold">${state.currentProject.name}</h1>
+                    <p class="text-gray-500">${state.currentProject.description || ''}</p>
+                </div>
+                
+                <!-- Kanban Board -->
+                <div class="mb-8">
+                    <h2 class="font-semibold mb-4">Tasks</h2>
+                    <div class="grid grid-cols-4 gap-4">
+                        ${stages.map(stage => `
+                            <div class="stage-${stage} rounded-xl p-4 min-h-[200px]">
+                                <div class="flex justify-between items-center mb-3">
+                                    <h3 class="font-medium text-sm">${stageNames[stage]}</h3>
+                                    <span class="text-xs text-gray-500">${state.tasks.filter(t => t.stage === stage).length}</span>
+                                </div>
+                                <div class="space-y-2">
+                                    ${state.tasks.filter(t => t.stage === stage).map(task => `
+                                        <div class="bg-white p-3 rounded-lg shadow-sm border">
+                                            <p class="text-sm font-medium">${task.title}</p>
+                                            ${task.due_date ? `<p class="text-xs text-gray-500 mt-1">Due: ${new Date(task.due_date).toLocaleDateString()}</p>` : ''}
+                                            <div class="flex gap-1 mt-2">
+                                                ${stages.filter(s => s !== stage).map(s => `
+                                                    <button onclick="updateTask('${task.id}', {stage: '${s}'})" 
+                                                            class="text-xs px-2 py-1 bg-gray-100 rounded hover:bg-gray-200">→ ${stageNames[s].split(' ')[0]}</button>
+                                                `).join('')}
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                                <button onclick="promptNewTask('${stage}')" class="w-full mt-2 py-2 text-sm text-gray-500 hover:text-gray-700 border-2 border-dashed rounded-lg">+ Add task</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                
+                <!-- Updates Feed -->
+                <div class="grid md:grid-cols-2 gap-8">
+                    <div>
+                        <h2 class="font-semibold mb-4">Updates</h2>
+                        <form onsubmit="handlePostUpdate(event)" class="mb-4">
+                            <textarea name="content" rows="3" required placeholder="Write an update for your client..." 
+                                      class="w-full px-4 py-2 border rounded-lg mb-2"></textarea>
+                            <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">Post Update</button>
+                        </form>
+                        <div class="space-y-4">
+                            ${state.updates.map(u => `
+                                <div class="bg-white p-4 rounded-xl border">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <span class="font-medium text-sm">${u.author_name || 'Unknown'}</span>
+                                        <span class="text-xs text-gray-500">${timeAgo(u.created_at)}</span>
+                                    </div>
+                                    <p class="text-sm text-gray-700">${u.content}</p>
+                                </div>
+                            `).join('') || '<p class="text-gray-500">No updates yet</p>'}
+                        </div>
+                    </div>
+                    
+                    <!-- Files -->
+                    <div>
+                        <h2 class="font-semibold mb-4">Files</h2>
+                        <form onsubmit="handleUploadFile(event)" enctype="multipart/form-data" class="mb-4">
+                            <input type="file" name="file" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 mb-2">
+                            <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">Upload</button>
+                        </form>
+                        <div class="space-y-2">
+                            ${state.files.map(f => `
+                                <div class="bg-white p-4 rounded-xl border flex justify-between items-center">
+                                    <div>
+                                        <p class="font-medium text-sm">${f.name}</p>
+                                        <p class="text-xs text-gray-500">${formatBytes(f.file_size)} • ${f.download_count || 0} downloads</p>
+                                        ${f.last_downloaded ? `<p class="text-xs text-green-600">Last downloaded ${timeAgo(f.last_downloaded)}</p>` : ''}
+                                    </div>
+                                </div>
+                            `).join('') || '<p class="text-gray-500">No files yet</p>'}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    function promptNewTask(stage) {
+        const title = prompt('Task title:');
+        if (title) createTask(state.currentProject.id, title, stage);
+    }
+
+    async function handlePostUpdate(e) {
+        e.preventDefault();
+        const form = e.target;
+        await postUpdate(state.currentProject.id, form.content.value);
+        form.reset();
+    }
+
+    async function handleUploadFile(e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        
+        const res = await fetch(`/api/projects/${state.currentProject.id}/files`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${state.token}` },
+            body: formData
+        });
+        
+        if (res.ok) {
+            state.files = await api.get(`/projects/${state.currentProject.id}/files`);
+            render();
+        } else {
+            alert('Upload failed');
+        }
+    }
+
+    // ==================== HELPERS ====================
+    function timeAgo(date) {
+        const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+        if (seconds < 60) return 'just now';
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        return `${days}d ago`;
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    // ==================== INIT ====================
+    checkAuth();
+    </script>
+</body>
+</html>

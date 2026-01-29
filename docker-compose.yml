@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    container_name: handoff-app
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/handoff
+      - JWT_SECRET=handoff-jwt-secret-2026-production
+      - PORT=3000
+    volumes:
+      - handoff-uploads:/data/uploads
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.handoff-app.rule=Host(`app.handoff.jdms.nl`)"
+      - "traefik.http.routers.handoff-app.entrypoints=websecure"
+      - "traefik.http.routers.handoff-app.tls.certresolver=letsencrypt"
+      - "traefik.http.services.handoff-app.loadbalancer.server.port=3000"
+    networks:
+      - n8n-setup_n8n-network
+      - handoff-internal
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15-alpine
+    container_name: handoff-app-db
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=handoff
+    volumes:
+      - handoff-db:/var/lib/postgresql/data
+    networks:
+      - handoff-internal
+
+volumes:
+  handoff-uploads:
+  handoff-db:
+
+networks:
+  n8n-setup_n8n-network:
+    external: true
+  handoff-internal:
+    driver: bridge
