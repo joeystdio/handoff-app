@@ -11,10 +11,10 @@ services:
       - handoff-uploads:/data/uploads
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.handoff-app.rule=Host(`app.handoff.jdms.nl`)"
-      - "traefik.http.routers.handoff-app.entrypoints=websecure"
-      - "traefik.http.routers.handoff-app.tls.certresolver=letsencrypt"
-      - "traefik.http.services.handoff-app.loadbalancer.server.port=3000"
+      - "traefik.http.routers.handoffapp.rule=Host(`handoff.jdms.nl`)"
+      - "traefik.http.routers.handoffapp.entrypoints=websecure"
+      - "traefik.http.routers.handoffapp.tls.certresolver=letsencrypt"
+      - "traefik.http.services.handoffapp.loadbalancer.server.port=3000"
     networks:
       - n8n-setup_n8n-network
       - handoff-internal
